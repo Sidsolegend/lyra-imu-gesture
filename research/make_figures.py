@@ -29,7 +29,7 @@ full = [s for s in subjects
                for g in ["FLICK", "TWIST", "PINCH"])]
 lrows = [r for r in rows if r["subject"] in full]
 
-# Figure 1 -- accelStd, pinch vs incidental motion (NONE-truth).
+# accelStd distribution, pinch vs incidental motion (NONE-truth) -- Figure 1
 pinch_std = [r["accelStd"] for r in lrows if r["truth"] == "PINCH"]
 none_std = [r["accelStd"] for r in lrows if r["truth"] == "NONE"]
 
@@ -45,7 +45,7 @@ ax.legend()
 fig.savefig(f"{OUT}/lyra_fig1_accelstd_separation.png", dpi=150)
 print("fig1: pinch n=", len(pinch_std), "none n=", len(none_std))
 
-# Figure 2 -- pure-tree per-gesture accuracy vs depth (LOSO, 3 subjects).
+# Figure 2: pure-tree accuracy vs depth, per gesture, LOSO on the 3 breadboard subjects
 depths = list(range(1, 9))
 acc_by_gesture = {"FLICK": [], "TWIST": [], "PINCH": []}
 for d in depths:
@@ -65,7 +65,7 @@ ax.legend(frameon=False)
 fig.savefig(f"{OUT}/lyra_fig2_tree_overfitting.png", dpi=150)
 print("fig2: flick accuracy by depth ->", dict(zip(depths, [round(v, 1) for v in acc_by_gesture["FLICK"]])))
 
-# Figure 3 -- rules-only vs deployed hybrid, per gesture (Table 2 numbers).
+# and Figure 3 -- rules vs deployed hybrid, same numbers as Table 2
 def clf_hybrid_deployed(train, test):
     residual = [r for r in train
                 if not (r["peakGyro"] < GYRO_FLOOR

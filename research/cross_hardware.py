@@ -56,7 +56,7 @@ def print_table(title, rows):
         print(f"  {label:32s}  {'  '.join(bits)}")
 
 
-# --- load both datasets ------------------------------------------------
+# load both datasets
 wrist_rows, _ = load(os.path.join(ROOT, "data", "real_10subj.csv"))
 bread_rows, _ = load(os.path.join(ROOT, "data", "lyra_multisubject.csv"))
 subjects = sorted(set(r["subject"] for r in bread_rows))
@@ -97,7 +97,7 @@ def deployed_hybrid_loso(train_rows, held_subjects):
     return loso(train_rows, held_subjects, clf_hybrid_deployed)
 
 
-# --- Table 3: rules-only and hybrid, both rigs -------------------------
+# Table 3: rules-only and hybrid, both rigs
 rules_breadboard = gesture_acc(bread_lrows, "truth", lambda r: r["device"])
 rules_wrist = gesture_acc(wrist_rows, "truth", lambda r: classify_fast(to_classify_feat(r)))
 
@@ -115,7 +115,7 @@ print_table("Table 3 -- Rules-only, wrist (N=10)", [("Rules, wrist", rules_wrist
 print_table("Table 3 -- Hybrid, breadboard (N=3, LOSO)", [("Hybrid, breadboard", hybrid_bread)])
 print_table("Table 3 -- Hybrid, wrist (N=10)", [("Hybrid, wrist", hybrid_wrist)])
 
-# --- Table 4: per-participant hybrid, ten wrist-mounted participants ---
+# Table 4: per-participant hybrid, ten wrist-mounted participants
 print("\n=== Table 4 -- per-participant hybrid accuracy, wrist (N=10) ===")
 for p in sorted(set(r["subject"] for r in wrist_rows)):
     prows = [r for r in wrist_rows if r["subject"] == p]
@@ -123,7 +123,7 @@ for p in sorted(set(r["subject"] for r in wrist_rows)):
     parts = "  ".join(f"{g} {v[0]}% (n={v[4]})" for g, v in acc.items())
     print(f"  {p:4s}  {parts}")
 
-# --- Table 5: within-subject, A/B/C on both rigs, both classifiers -----
+# Table 5: within-subject, A/B/C on both rigs, both classifiers.
 # "Hybrid, breadboard" here is NOT LOSO -- it is the same framing as Table 1:
 # the tree as actually deployed (fit once on all three breadboard subjects,
 # depth 4 / min_leaf 3, the hyperparameters that reproduce the shipped
@@ -161,8 +161,7 @@ for person in ["A", "B", "C"]:
               f"  rules_wrist={rules_w_hit}/{len(wrist_sub)}"
               f"  hybrid_wrist={hybrid_w_hit}/{len(wrist_sub)}")
 
-# --- Table 6: stage-2 tree and hybrid, refit and LOSO'd at N=10 --------
-
+# last one: stage-2 tree and hybrid, refit and LOSO'd at N=10 instead of N=3
 wrist_subjects = sorted(set(r["subject"] for r in wrist_rows))
 print("\n=== Table 6 -- refit at N=10, wrist dataset ===")
 summarize(loso(wrist_rows, wrist_subjects, clf_tree(3)), "pure tree, refit N=10")
