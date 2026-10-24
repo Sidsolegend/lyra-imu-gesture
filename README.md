@@ -17,7 +17,11 @@ just the parts a reviewer or reader would want to check.
   3-6, the cross-hardware and within-subject comparisons. `make_figures.py`
   regenerates Figures 1-3. `firmware_port.py` is a Python port of the
   deployed classifier, used to evaluate it against raw sensor features
-  without needing the actual microcontroller.
+  without needing the actual microcontroller. `mechanism.py` runs the
+  counterfactual experiments that explain *why* the rules broke on the wrist
+  mounting and the hybrid did not (component swaps, re-fitted thresholds,
+  critical gain, a synthetic gain sweep, bootstrap trees and a
+  per-participant check), and writes the three `figures/mechanism_*.png`.
 - `firmware/` -- the deployed classifier as it runs on the device
   (`lyra_daily_hid.ino`), with the shared DSP/classifier/IMU logic split
   into `lib/*.h` so the sketch itself is just the event loop.
@@ -31,6 +35,7 @@ just the parts a reviewer or reader would want to check.
 python3 research/lyra_ml.py data/lyra_multisubject.csv       # Tables 1-2
 python3 research/cross_hardware.py                            # Tables 3-6
 python3 research/make_figures.py                              # Figures 1-3
+python3 research/mechanism.py --markdown --figures            # mechanism analysis
 ```
 
 No dependencies beyond Python 3 and matplotlib (only needed for the last
