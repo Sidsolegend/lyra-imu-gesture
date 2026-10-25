@@ -30,6 +30,10 @@ directly, on the committed data only, with no retraining on the wrist data:
   E7  Per-participant consistency. Each swap and the fitted rules, scored
       separately for every one of the ten wrist participants, with an exact
       sign test across participants.
+  E8  Quantile prediction. Each boundary's class-kept fraction on the wrist,
+      predicted by scaling every breadboard window (not just the median).
+  E9  Axis mixing. The class-wise change in `ratio` (axis concentration),
+      added to the gain replay, to account for the twist loss gain misses.
 
 Usage:
   python3 research/mechanism.py               # all experiments
@@ -68,6 +72,7 @@ HAND_SEP = 700.0     # PINCH_TWIST_BOUNDARY, "FIXED (project decision)"
 HAND_GATE = 0.40     # pinchGate / MIN_PINCH_ACCEL_STD, "provisional"
 
 GYRO_KEYS = ("peakGyro", "gySigned", "gzSigned", "absGy", "absGz")
+GESTURES4 = ("TWIST", "PINCH", "FLICK", "NONE")
 SEED = 0
 N_BOOT = 2000
 N_TREES = 300
@@ -265,11 +270,17 @@ def critical_gain_table(bb, wr, fit_sep, fit_gate):
         crosses = k_obs < k_star if side in (">=", ">") else k_obs > k_star
         pass_bb = sum(keep(r[f]) for r in bb if r["truth"] == g) / sum(r["truth"] == g for r in bb)
         pass_wr = sum(keep(r[f]) for r in wr if r["truth"] == g) / sum(r["truth"] == g for r in wr)
+        # E8: the whole distribution, not just the median. Scale every
+        # breadboard window of the class by k_obs and count how many the
+        # boundary still keeps; this predicts the size of the loss, which the
+        # median rule (half the class crosses at k*) cannot.
+        vals = [r[f] for r in bb if r["truth"] == g]
+        pass_pred = sum(keep(v * k_obs) for v in vals) / len(vals)
         out.append({"classifier": clf, "boundary": name, "feature": f,
                     "threshold": thr, "class": g, "side": side,
                     "median_bb": m_bb, "k_star": k_star, "k_obs": k_obs,
                     "predicted_fail": crosses,
-                    "pass_bb": pass_bb, "pass_wr": pass_wr})
+                    "pass_bb": pass_bb, "pass_wr": pass_wr, "pass_pred": pass_pred})
     return out
 
 
@@ -287,6 +298,21 @@ def rescale(rows, ka=1.0, kg=1.0):
         x["peakAccel"] = 1.0 + (x["peakAccel"] - 1.0) * ka
         for k in GYRO_KEYS:
             x[k] *= kg
+        out.append(x)
+    return out
+
+
+def remix(rows, kr):
+    """E9: axis mixing. Multiply each window's axis-concentration `ratio` by
+    its class's observed wrist/breadboard ratio gain kr[class]. A wrist mount
+    aligns a gyro axis with the forearm, so rotation about it (twist)
+    concentrates in one axis and `ratio` rises; a pure amplitude gain cannot
+    change `ratio`, so this is the part of the shift the gain model misses.
+    Uses truth labels, so it is a diagnostic, not a deployable correction."""
+    out = []
+    for r in rows:
+        x = dict(r)
+        x["ratio"] *= kr[r["truth"]]
         out.append(x)
     return out
 
@@ -455,6 +481,24 @@ def run_all(bb, wr):
                    "rules_sim": score(rep, rules), "hybrid_sim": score(rep, hybrid),
                    "rules_wr": score(wr, rules), "hybrid_wr": score(wr, hybrid)}
     # Twists that leave via the flick gate are a non-gain effect (axis mix).
+    # ---- E9 axis mixing on top of the gain replay -----------------------------
+    kr = {g: st.median(r["ratio"] for r in wr if r["truth"] == g)
+          / st.median(r["ratio"] for r in bb if r["truth"] == g) for g in GESTURES4}
+    mixed = remix(rep, kr)
+
+    def to_flick(rows):
+        s = [r for r in rows if r["truth"] == "TWIST"]
+        return sum(rules(r) == "FLICK" for r in s) / len(s)
+    rb, rw = acc(bb, rules, "TWIST"), acc(wr, rules, "TWIST")
+    R["axis_mixing"] = {
+        "kr": kr,
+        "rules_gain_only": score(rep, rules), "rules_gain_mix": score(mixed, rules),
+        "hybrid_gain_mix": score(mixed, hybrid),
+        "twist_loss_explained_gain": (rb - acc(rep, rules, "TWIST")) / (rb - rw),
+        "twist_loss_explained_mix": (rb - acc(mixed, rules, "TWIST")) / (rb - rw),
+        "twist_to_flick": {"bb": to_flick(bb), "gain": to_flick(rep),
+                           "gain_mix": to_flick(mixed), "wr": to_flick(wr)}}
+
     R["twist_to_flick_wr"] = sum(1 for r in wr if r["truth"] == "TWIST"
                                  and _stage1(r) == "FLICK")
     R["ratio_twist"] = {"bb": st.median(r["ratio"] for r in bb if r["truth"] == "TWIST"),
@@ -588,7 +632,9 @@ def print_text(R):
         print(f"  {b['classifier']:12s} {b['boundary']:22s} {b['feature']:13s} "
               f"thr {b['threshold']:8.3f} k*={b['k_star']:.2f} obs={b['k_obs']:.2f} "
               f"predict {'FAIL' if b['predicted_fail'] else 'hold'}  "
-              f"pass {p100(b['pass_bb'])} -> {p100(b['pass_wr'])}")
+              f"pass {p100(b['pass_bb'])} -> {p100(b['pass_wr'])} (E8 predicted {p100(b['pass_pred'])})")
+    err = [abs(b["pass_pred"] - b["pass_wr"]) for b in R["critical_gain"]]
+    print(f"  E8 mean |predicted - actual| class kept: {100*st.mean(err):.1f} points")
 
     rp = R["replay"]
     print(f"\n=== E4 replay of observed gain (ka={rp['ka']:.3f}, kg={rp['kg']:.3f}) ===")
@@ -604,6 +650,21 @@ def print_text(R):
     print("  kg sweep (rules twist / hybrid twist):",
           " ".join(f"{s['k']}:{100*s['rules']['TWIST']:.0f}/{100*s['hybrid']['TWIST']:.0f}"
                    for s in R["sweep_kg"]))
+
+    am = R["axis_mixing"]
+    print("\n=== E9 axis mixing (ratio gain per class) on top of the gain replay ===")
+    print("  ratio gain: " + "  ".join(f"{g.lower()} x{k:.2f}" for g, k in am["kr"].items()))
+    for lab, k in [("gain only", "rules_gain_only"), ("gain + mixing", "rules_gain_mix")]:
+        s_ = am[k]
+        print(f"  rules, {lab:14s} twist {p100(s_['TWIST'])} pinch {p100(s_['PINCH'])}"
+              f" flick {p100(s_['FLICK'])}")
+    print(f"  share of rules' twist loss explained: gain {100*am['twist_loss_explained_gain']:.0f}%,"
+          f" gain + mixing {100*am['twist_loss_explained_mix']:.0f}%")
+    tf = am["twist_to_flick"]
+    print(f"  twists called FLICK: breadboard {p100(tf['bb'])}, gain {p100(tf['gain'])},"
+          f" gain + mixing {p100(tf['gain_mix'])}, actual wrist {p100(tf['wr'])}")
+    h = am["hybrid_gain_mix"]
+    print(f"  hybrid, gain + mixing: twist {p100(h['TWIST'])} pinch {p100(h['PINCH'])}")
 
     print("\n=== E5 learned trees fit on breadboard, scored on wrist ===")
     for k, v in R["subsets"].items():
