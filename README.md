@@ -1,10 +1,38 @@
-# LYRA gesture recognition: data, code, and firmware
+# LYRA: why a wrist gesture recognizer survived a hardware change
 
-This repo has everything needed to reproduce the numbers, figures, and stage-2
-decision tree in the paper *LYRA: An App-Free, On-Device Hybrid Classifier for
-Wrist-IMU Gesture Recognition*. It is not the full LYRA project (the Flutter
-app, the 3D-printed enclosure, the robot-arm bridge, etc. live elsewhere) --
-just the parts a reviewer or reader would want to check.
+LYRA is a wrist-worn gesture controller I built: an ESP32 and a 6-axis IMU
+that recognize flick, twist and pinch on the device itself and send them to
+a phone or laptop as Bluetooth media keys (no app, no cloud). This repo has
+the data, analysis code and firmware behind the research write-up.
+
+**The finding in 30 seconds.** When the electronics moved from a breadboard
+held loosely on the hand (3 people, 401 gesture windows) to a snug wrist
+enclosure (10 people, 1000 windows), the hand-tuned rules collapsed (pinch
+77% → 12%, twist 63% → 38%) while a small learned decision tree, never
+retrained, held at about 76%. Counterfactual tests show why:
+
+- **Two thresholds cause the whole effect.** Swapping one decision boundary
+  between the two classifiers restores or breaks exactly one gesture, in both
+  directions, and for all ten participants individually.
+- **Learning isn't the cause.** The same hand-written rules with their two
+  numbers re-fitted from data transfer too.
+- **Critical gain.** The snug mount acts like a gain on the signal
+  (accelerometer variance ×0.68). A threshold breaks when that gain crosses
+  its *critical gain*: threshold ÷ median of the gesture it protects. The
+  hand-set thresholds sat at 0.92 and 0.85, inside the shift; the tree's sat
+  far outside it. This predicts which boundaries fail and which way each
+  repeat participant's accuracy moved.
+
+![Component swap: twist depends only on the separator used, pinch only on the pinch boundary](figures/mechanism_component_swap.png)
+
+*Grey: breadboard. Colour: wrist. Twist accuracy depends only on which
+twist/pinch separator is used; pinch accuracy only on which pinch boundary
+is used.*
+
+**Status:** manuscript in preparation. `paper/` holds an earlier version of
+the write-up; its explanation of the effect ("the tree captures shape, not
+magnitude") was tested by `research/mechanism.py` and turned out to be wrong.
+The critical-gain account above replaces it.
 
 ## What's here
 
@@ -27,7 +55,7 @@ just the parts a reviewer or reader would want to check.
   into `lib/*.h` so the sketch itself is just the event loop.
 - `figures/` -- the regenerated figures plus a photo of the two hardware
   mountings referenced in the paper.
-- `paper/` -- the manuscript.
+- `paper/` -- an earlier version of the manuscript (see Status above).
 
 ## Reproducing the tables
 
@@ -64,6 +92,13 @@ or compatible clone on I2C (SDA=GPIO6, SCL=GPIO7). It reads the IMU,
 extracts the same nine features the analysis scripts use, runs the same
 two-stage classifier, and reports gestures over BLE as HID media keys, so
 it works with any host without a companion app.
+
+## Credits
+
+Device, firmware, data collection and the original analysis: Siddharth
+Bansal. The counterfactual analysis in `research/mechanism.py` was written
+with the help of an AI assistant; every number it produces comes from the
+data in `data/`.
 
 ## License
 
