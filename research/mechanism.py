@@ -363,13 +363,14 @@ def split_feats(node, acc_=None):
     return acc_
 
 
-def bootstrap_trees(bb, wr, ka, kg, n=N_TREES, seed=SEED):
+def bootstrap_trees(bb, wr, ka, kg, kr=None, n=N_TREES, seed=SEED):
     """Each tree is scored on the real wrist data and, as an out-of-sample test
     of the gain hypothesis, on breadboard data rescaled by the observed gain
     (computed before any tree is fit, from feature medians only)."""
     rng = random.Random(seed)
     resid = [r for r in bb if _stage1(r) is None]
     sim = rescale(bb, ka=ka, kg=kg)
+    simx = remix(sim, kr) if kr else None
     res = []
     for _ in range(n):
         s = [rng.choice(resid) for _ in resid]
@@ -378,7 +379,9 @@ def bootstrap_trees(bb, wr, ka, kg, n=N_TREES, seed=SEED):
         sc = score(wr, clf)
         res.append({"root": node.feat, "TWIST": sc["TWIST"], "PINCH": sc["PINCH"],
                     "NONE": sc["NONE"], "sim_TWIST": acc(sim, clf, "TWIST"),
-                    "sim_PINCH": acc(sim, clf, "PINCH")})
+                    "sim_PINCH": acc(sim, clf, "PINCH"),
+                    "simx_PINCH": acc(simx, clf, "PINCH") if simx else None,
+                    "uses_ratio": "ratio" in split_feats(node)})
     return res
 
 
@@ -481,6 +484,14 @@ def run_all(bb, wr):
                    "rules_sim": score(rep, rules), "hybrid_sim": score(rep, hybrid),
                    "rules_wr": score(wr, rules), "hybrid_wr": score(wr, hybrid)}
     # Twists that leave via the flick gate are a non-gain effect (axis mix).
+    # ---- Loose-mount prediction (paper §6.2): rescale the WRIST data upward ---
+    R["loose_prediction"] = {
+        "k_star_cap_vs_wrist": fw.TREE["aStdSplit"] / st.median(
+            r["accelStd"] for r in wr if r["truth"] == "PINCH"),
+        "sweep": [{"k": k, "rules": score(rescale(wr, ka=k), rules),
+                   "hybrid": score(rescale(wr, ka=k), hybrid)}
+                  for k in (1.0, 1.2, 1.4, 1.6, 1.8, 2.0, 2.2, 2.5, 3.0)]}
+
     # ---- E9 axis mixing on top of the gain replay -----------------------------
     kr = {g: st.median(r["ratio"] for r in wr if r["truth"] == g)
           / st.median(r["ratio"] for r in bb if r["truth"] == g) for g in GESTURES4}
@@ -515,7 +526,7 @@ def run_all(bb, wr):
         R["subsets"][name] = {"loso_bb": loso_score(bb, feats),
                               "wr": score(wr, hybrid_from(node)),
                               "root": node.feat, "thr": node.thr}
-    boots = bootstrap_trees(bb, wr, ka_obs, kg_obs)
+    boots = bootstrap_trees(bb, wr, ka_obs, kg_obs, kr)
     roots = {}
     for b in boots:
         roots[b["root"]] = roots.get(b["root"], 0) + 1
@@ -533,6 +544,20 @@ def run_all(bb, wr):
         "both": sum(p and r for p, r in zip(pred_break, real_break)),
         "agree": sum(p == r for p, r in zip(pred_break, real_break)),
         "pairs": [(s, w) for s, w in zip(pin_sim, pin_wr)]}
+    # Same test with axis mixing added to the simulation (E9 + E5).
+    pin_simx = [b["simx_PINCH"] for b in boots]
+    pred_x = [v < 0.5 for v in pin_simx]
+    R["bootstrap_prediction_mix"] = {
+        "spearman_pinch": spearman(pin_simx, pin_wr),
+        "n_pred_break": sum(pred_x), "n_real_break": sum(real_break),
+        "both": sum(p and r for p, r in zip(pred_x, real_break)),
+        "agree": sum(p == r for p, r in zip(pred_x, real_break))}
+    newly = [b for b, pg, px, rb_ in zip(boots, pred_break, pred_x, real_break)
+             if rb_ and px and not pg]
+    rest = [b for b in boots if b not in newly]
+    R["bootstrap_prediction_mix"]["newly_caught"] = len(newly)
+    R["bootstrap_prediction_mix"]["newly_caught_use_ratio"] = sum(b["uses_ratio"] for b in newly)
+    R["bootstrap_prediction_mix"]["others_use_ratio"] = (sum(b["uses_ratio"] for b in rest), len(rest))
     R["bootstrap"] = {
         "n": len(boots), "roots": roots,
         **{g: {"median": st.median(b[g] for b in boots),
@@ -555,6 +580,14 @@ def run_all(bb, wr):
                     "rules_twist_bb": ra, "rules_twist_wr": rb,
                     "predicted_up": kg_s > 1.0, "observed_up": rb > ra})
     R["triad"] = tri
+    # Gains measured only on the three people who used both rigs: if these
+    # match the pooled gains, the shift is a property of the mount, not of
+    # who was in the wrist cohort.
+    tw = [r for r in wr if r["subject"] in {v[1] for v in TRIAD.values()}]
+    R["triad_gain"] = {f: {g: st.median(r[f] for r in tw if r["truth"] == g)
+                           / st.median(r[f] for r in bb if r["truth"] == g)
+                           for g in ("TWIST", "PINCH", "FLICK")}
+                       for f in ("accelStd", "peakGyro")}
 
     # ---- E7 per-participant consistency (all ten wrist participants) --------
     variants = {"rules": rules, "tree separator": cascade("tree", "hand"),
@@ -651,6 +684,14 @@ def print_text(R):
           " ".join(f"{s['k']}:{100*s['rules']['TWIST']:.0f}/{100*s['hybrid']['TWIST']:.0f}"
                    for s in R["sweep_kg"]))
 
+    lp = R["loose_prediction"]
+    print(f"\n=== Loose-mount prediction: wrist data rescaled upward "
+          f"(hybrid pinch cap k* vs wrist = {lp['k_star_cap_vs_wrist']:.2f}) ===")
+    for s_ in lp["sweep"]:
+        print(f"  ka x{s_['k']:.1f}: rules pinch {p100(s_['rules']['PINCH'])}, hybrid pinch "
+              f"{p100(s_['hybrid']['PINCH'])}, rules NONE {p100(s_['rules']['NONE'])}, "
+              f"hybrid NONE {p100(s_['hybrid']['NONE'])}")
+
     am = R["axis_mixing"]
     print("\n=== E9 axis mixing (ratio gain per class) on top of the gain replay ===")
     print("  ratio gain: " + "  ".join(f"{g.lower()} x{k:.2f}" for g, k in am["kr"].items()))
@@ -682,6 +723,14 @@ def print_text(R):
     print(f"  pinch < 50%: predicted {bp['n_pred_break']}, actual {bp['n_real_break']}, "
           f"both {bp['both']}; agreement {bp['agree']}/{len(bp['pairs'])}")
 
+    bx = R["bootstrap_prediction_mix"]
+    print(f"  with axis mixing added: Spearman pinch {bx['spearman_pinch']:.2f}; pinch < 50%: "
+          f"predicted {bx['n_pred_break']}, actual {bx['n_real_break']}, both {bx['both']}; "
+          f"agreement {bx['agree']}/{len(bp['pairs'])}")
+    ou, on = bx["others_use_ratio"]
+    print(f"  trees newly caught by adding mixing: {bx['newly_caught']}, of which "
+          f"{bx['newly_caught_use_ratio']} split on ratio (other trees: {ou}/{on})")
+
     print("\n=== E6 within-subject: sign of peakGyro change predicts rules-twist change ===")
     for t in R["triad"]:
         print(f"  {t['person']}: kg={t['kg']:.2f} ka={t['ka']:.2f}  >=700 dps "
@@ -689,6 +738,10 @@ def print_text(R):
               f"{p100(t['rules_twist_bb'])} -> {p100(t['rules_twist_wr'])}  "
               f"predicted {'up' if t['predicted_up'] else 'down'}, observed "
               f"{'up' if t['observed_up'] else 'down'}")
+
+    tg = R["triad_gain"]
+    print("  gains from the three repeat participants only: " + "; ".join(
+        f"{f} " + ", ".join(f"{g.lower()} x{v:.2f}" for g, v in d.items()) for f, d in tg.items()))
 
     print("\n=== E7 per wrist participant: swap / fitted-rules improvement ===")
     for p in R["per_participant"]:
