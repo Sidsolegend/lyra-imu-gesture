@@ -32,6 +32,9 @@ directly, on the committed data only, with no retraining on the wrist data:
       sign test across participants.
   E8  Quantile prediction. Each boundary's class-kept fraction on the wrist,
       predicted by scaling every breadboard window (not just the median).
+  E10 Leave-one-participant-out gains: each wrist participant's losses
+      predicted from gains measured on the other nine.
+  E11 Label-free gain: gains from medians over all windows, no labels.
   E9  Axis mixing. The class-wise change in `ratio` (axis concentration),
       added to the gain replay, to account for the twist loss gain misses.
 
@@ -580,6 +583,49 @@ def run_all(bb, wr):
                     "rules_twist_bb": ra, "rules_twist_wr": rb,
                     "predicted_up": kg_s > 1.0, "observed_up": rb > ra})
     R["triad"] = tri
+
+    # ---- E10 leave-one-participant-out gains --------------------------------
+    # For each wrist participant, the class gain comes from the OTHER nine, and
+    # predicts the held-out person's class-kept fraction (E8 method). Pooled
+    # over the ten folds, weighted by each person's windows.
+    subs = sorted(set(r["subject"] for r in wr))
+    lopo = []
+    for clf_name, name, f, thr, g, side in boundaries(fit_sep, fit_gate):
+        keep = (lambda v, t=thr: v >= t) if side in (">=", ">") else (lambda v, t=thr: v <= t)
+        bbv = [r[f] for r in bb if r["truth"] == g]
+        mb = st.median(bbv)
+        pk = ak = n = 0
+        for p in subs:
+            others = [r[f] for r in wr if r["subject"] != p and r["truth"] == g]
+            held = [r[f] for r in wr if r["subject"] == p and r["truth"] == g]
+            k = st.median(others) / mb
+            pk += sum(keep(v * k) for v in bbv) / len(bbv) * len(held)
+            ak += sum(keep(v) for v in held)
+            n += len(held)
+        lopo.append({"classifier": clf_name, "boundary": name, "pred": pk / n, "actual": ak / n})
+    R["lopo_gain"] = lopo
+
+    # ---- E11 label-free gain ------------------------------------------------
+    # The gain from medians over ALL windows, no gesture labels: something a
+    # device could estimate in the field. Predicts fail/hold per boundary.
+    def lf_gain(f):
+        return st.median(r[f] for r in wr) / st.median(r[f] for r in bb)
+    lf = []
+    for clf_name, name, f, thr, g, side in boundaries(fit_sep, fit_gate):
+        keep = (lambda v, t=thr: v >= t) if side in (">=", ">") else (lambda v, t=thr: v <= t)
+        bbv = [r[f] for r in bb if r["truth"] == g]
+        k = lf_gain(f)
+        k_star = thr / st.median(bbv)
+        fails = k < k_star if side in (">=", ">") else k > k_star
+        actual_fail = next(b["predicted_fail"] for b in R["critical_gain"]
+                           if b["classifier"] == clf_name and b["boundary"] == name)
+        lf.append({"classifier": clf_name, "boundary": name, "k": k, "k_star": k_star,
+                   "pred_fail": fails, "labelled_pred_fail": actual_fail,
+                   "pred": sum(keep(v * k) for v in bbv) / len(bbv),
+                   "actual": sum(keep(r[f]) for r in wr if r["truth"] == g)
+                   / sum(r["truth"] == g for r in wr)})
+    R["label_free_gain"] = {"ka": lf_gain("accelStd"), "kg": lf_gain("peakGyro"),
+                            "boundaries": lf}
     # Gains measured only on the three people who used both rigs: if these
     # match the pooled gains, the shift is a property of the mount, not of
     # who was in the wrist cohort.
@@ -742,6 +788,24 @@ def print_text(R):
     tg = R["triad_gain"]
     print("  gains from the three repeat participants only: " + "; ".join(
         f"{f} " + ", ".join(f"{g.lower()} x{v:.2f}" for g, v in d.items()) for f, d in tg.items()))
+
+    print("\n=== E10 leave-one-participant-out gains (gain from the other nine) ===")
+    for b in R["lopo_gain"]:
+        print(f"  {b['classifier']:12s} {b['boundary']:22s} predicted kept {p100(b['pred'])}"
+              f"  actual {p100(b['actual'])}")
+    err = [abs(b["pred"] - b["actual"]) for b in R["lopo_gain"]]
+    print(f"  mean |error| {100*st.mean(err):.1f} points")
+    L = R["label_free_gain"]
+    print(f"\n=== E11 label-free gain (medians over all windows): ka x{L['ka']:.3f}, kg x{L['kg']:.3f} ===")
+    for b in L["boundaries"]:
+        print(f"  {b['classifier']:12s} {b['boundary']:22s} k={b['k']:.2f} k*={b['k_star']:.2f} "
+              f"predict {'FAIL' if b['pred_fail'] else 'hold'} (labelled: "
+              f"{'FAIL' if b['labelled_pred_fail'] else 'hold'})  kept pred {p100(b['pred'])}"
+              f" actual {p100(b['actual'])}")
+    agree = sum(b["pred_fail"] == b["labelled_pred_fail"] for b in L["boundaries"])
+    err = [abs(b["pred"] - b["actual"]) for b in L["boundaries"]]
+    print(f"  fail/hold agrees with the labelled model for {agree}/{len(L['boundaries'])} boundaries;"
+          f" mean |error| in kept fraction {100*st.mean(err):.1f} points")
 
     print("\n=== E7 per wrist participant: swap / fitted-rules improvement ===")
     for p in R["per_participant"]:

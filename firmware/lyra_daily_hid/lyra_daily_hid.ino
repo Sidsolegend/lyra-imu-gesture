@@ -25,6 +25,7 @@
 #include "../lib/lyra_features.h"
 #include "../lib/lyra_classifier.h"
 #include "../lib/lyra_system.h"
+#include "../lib/lyra_led.h"        // glow on every recognised gesture
 
 using namespace lyra;
 
@@ -109,6 +110,7 @@ void act(Gesture g, bool flickRight, bool twistCW) {
     if (flickPending && (now - flickPendingMs) <= DOUBLE_FLICK_MS) {
       flickPending = false;
       armed = !armed;
+      ledArmed(armed);
       Serial.println(armed ? "*** ARMED ***" : "*** DISARMED ***");
     } else {
       flickPending = true;
@@ -160,6 +162,7 @@ void loadConfigNVS() {
 void analyzeAndAct() {
   Features f = extractFeatures(accelBuf, gxBuf, gyBuf, gzBuf, s1.minGyroFloor, lastDt);
   Gesture g = classifyHybrid(f, s1, tree);
+  if (g != G_NONE) ledGesture();
 
   bool flickRight = (f.peakGYSigned > 0);
   bool twistCW    = (f.peakGZSigned > 0);
@@ -174,7 +177,7 @@ void analyzeAndAct() {
   if (armed && customCount > 0 && g == G_NONE) {
     float feat[NUM_FEATURES]; featuresToVec(f, feat);
     int m = matchCustom(customGestures, customCount, feat);
-    if (m >= 0) { fireAction(customGestures[m].action, customGestures[m].name); return; }
+    if (m >= 0) { ledGesture(); fireAction(customGestures[m].action, customGestures[m].name); return; }
   }
   act(g, flickRight, twistCW);
 }
@@ -185,6 +188,7 @@ void setup() {
   Serial.setTimeout(50);
 
   systemBoot();                       // change #8: reset forensics + power opts
+  ledInit();                          // gesture-feedback LED
 
   // change #4: shared cold-boot bus recovery + init retry (C3 pins 6/7).
   mpuBringUp(LYRA_PIN_SDA, LYRA_PIN_SCL);
@@ -208,6 +212,7 @@ void setup() {
 // =============================================================================
 void loop() {
   wdtFeed();                          // change #8: loop alive -> no reboot
+  ledService();                       // advance the gesture glow (non-blocking)
 
   // serial command: @zero
   while (Serial.available()) {

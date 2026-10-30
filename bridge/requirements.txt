@@ -1,0 +1,4 @@
+# Mac/PC dependencies for bridge/lyra_to_ev3.py
+# Install with:  pip install -r requirements.txt
+pyserial>=3.5      # --serial mode (default)
+bleak>=0.21        # --ble mode (optional)

@@ -48,11 +48,24 @@ The critical-gain account above replaces it.
   without needing the actual microcontroller. `mechanism.py` runs the
   counterfactual experiments that explain *why* the rules broke on the wrist
   mounting and the hybrid did not (component swaps, re-fitted thresholds,
-  critical gain, a synthetic gain sweep, bootstrap trees and a
-  per-participant check), and writes the three `figures/mechanism_*.png`.
-- `firmware/` -- the deployed classifier as it runs on the device
-  (`lyra_daily_hid.ino`), with the shared DSP/classifier/IMU logic split
-  into `lib/*.h` so the sketch itself is just the event loop.
+  critical gain, a synthetic gain sweep, bootstrap trees, a per-participant
+  check, leave-one-participant-out gains and a label-free gain estimate),
+  and writes the three `figures/mechanism_*.png`.
+- `firmware/` -- the device firmware. `lyra_daily_hid/` is the deployed
+  classifier; the shared DSP, classifier, IMU, LED and power logic lives in
+  `lib/*.h`, so each sketch is just its output stage. The other sketches
+  reuse the same core: `lyra_calibration_stream/` (BLE data stream for
+  calibration), `lyra_collect_serial/` (serial CSV logging for data
+  collection), `lyra_ev3_bridge/` (gesture events over BLE UART for the
+  robot arm), `lyra_keyboard_hid/`, and the later ring, glasses and lantern
+  variants. `tools/` has helper scripts for over-the-air updates and audio.
+- `ev3/` -- the LEGO EV3 robot-arm code (ev3dev Python): the arm driver,
+  inverse kinematics with its test, jog and range-test utilities, routines,
+  and the shared motor limits in `lyra_config.py`.
+- `bridge/` -- `lyra_to_ev3.py`, which connects to the wristband over BLE and
+  forwards each gesture to the EV3 arm (reconnects, heartbeat, safe park).
+- `case/` -- the 3D-printed two-storey wrist enclosure: OpenSCAD sources,
+  STL files for each version, renders, and an STL verification script.
 - `figures/` -- the regenerated figures plus a photo of the two hardware
   mountings referenced in the paper.
 - `paper/` -- an earlier version of the manuscript (see Status above).
@@ -87,11 +100,12 @@ within-subject comparison uses.
 
 ## Firmware
 
-`lyra_daily_hid.ino` is Arduino/ESP32 code for an ESP32-C3 with an MPU-6050
+`firmware/lyra_daily_hid/lyra_daily_hid.ino` is Arduino/ESP32 code for an ESP32-C3 with an MPU-6050
 or compatible clone on I2C (SDA=GPIO6, SCL=GPIO7). It reads the IMU,
 extracts the same nine features the analysis scripts use, runs the same
 two-stage classifier, and reports gestures over BLE as HID media keys, so
-it works with any host without a companion app.
+it works with any host without a companion app. A short LED glow confirms
+each recognised gesture.
 
 ## Credits
 
